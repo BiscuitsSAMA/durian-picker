@@ -1,6 +1,6 @@
 # 🍈 挑个榴莲吧
 
-挑榴莲专家 Skill——Claude、Codex、Minis 等均可使用。
+挑榴莲专家 Skill——支持 Claude、Codex、OpenClaw / Minis 等 Agent。
 
 ## 使用方法
 
