@@ -31,6 +31,19 @@ body{font-family:-apple-system,'PingFang SC','Helvetica Neue',sans-serif;backgro
 .option-row[data-group="variety"] .option-btn{flex:0 0 calc(33.33% - 4px)}
 .option-row[data-group="sound"] .option-btn,.option-row[data-group="pinch"] .option-btn{flex:1}
 .option-btn.selected{border-color:#f59e0b;background:#fefce8;color:#b45309;font-weight:600;box-shadow:0 0 0 1px rgba(245,158,11,0.2)}
+
+/* Config Guide */
+.guide-card{display:none;text-align:center;padding:20px 0}
+.guide-card.show{display:block}
+.guide-card .icon{font-size:48px;margin-bottom:12px}
+.guide-card h2{font-size:18px;font-weight:600;color:#1d1d1f;margin-bottom:8px}
+.guide-card p{font-size:14px;color:#6e6e73;line-height:1.6;margin-bottom:16px}
+.guide-steps{text-align:left;background:#fafafa;border-radius:10px;padding:16px;margin-bottom:16px}
+.guide-steps li{font-size:14px;color:#3a3a3c;line-height:1.7;margin-left:18px;padding-left:4px;margin-bottom:10px}
+.guide-steps li a{color:#f59e0b;text-decoration:none;font-weight:500}
+.guide-steps li small{display:block;font-size:12px;color:#aeaeb2;margin-top:-2px}
+.guide-btn{display:inline-block;padding:12px 24px;border-radius:10px;background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;font-size:15px;font-weight:600;text-decoration:none;margin-top:4px}
+.guide-ok{display:inline-block;padding:8px 20px;border-radius:10px;background:#dcfce7;color:#166534;font-size:14px;font-weight:600}
 .steps{display:flex;gap:6px;margin-bottom:14px}
 .step{flex:1;text-align:center;padding:7px 2px;border-radius:8px;font-size:12px;color:#aeaeb2;background:#f5f5f7;transition:all .2s;white-space:nowrap}
 .step.active{background:#fefce8;color:#b45309;font-weight:600}
@@ -56,6 +69,46 @@ body{font-family:-apple-system,'PingFang SC','Helvetica Neue',sans-serif;backgro
 <div class="header"><h1>🍈 挑个榴莲吧</h1><p>拍照 · 点选 · AI 真正看图分析</p></div>
 <div class="container">
 
+<!-- Config Guide (shown when no model available) -->
+<div class="card guide-card" id="guideCard">
+  <div class="guide-card">
+    <div class="icon" id="guideIcon">🔍</div>
+    <h2 id="guideTitle">正在检查 AI 模型…</h2>
+    <p id="guideDesc">请稍等</p>
+    <div id="guideSteps" style="display:none">
+      <div class="guide-steps">
+        <ol style="list-style:none;margin:0;padding:0">
+          <li>
+            <strong>① 配置 AI 模型供应商</strong><br>
+            <small>需要支持图像识别（image_input）的模型才能分析照片</small>
+          </li>
+          <li>
+            <strong>② 推荐：硅基流动 (SiliconFlow)</strong><br>
+            <small>注册即送额度，支持 QwenVL、DeepSeek 等开源模型</small>
+          </li>
+          <li>
+            <strong>③ 配置完成后刷新本页面</strong><br>
+            <small>无需重启服务器，刷新页面即可自动检测到</small>
+          </li>
+        </ol>
+      </div>
+      <a class="guide-btn" href="https://cloud.siliconflow.cn" target="_blank">⚙️ 去硅基流动注册</a>
+      <div style="margin-top:10px;font-size:12px;color:#aeaeb2">
+        或查看 README.md 获取更多供应商配置方式
+      </div>
+      <div style="margin-top:16px;padding:12px;background:#fff;border-radius:8px;border:1px solid #e5e5e7;text-align:left;font-size:12px;color:#6e6e73;line-height:1.6">
+        <strong>💡 快速配置：</strong><br>
+        1. 打开 Settings → Providers → 添加 Provider<br>
+        2. 选择 SiliconFlow (硅基流动)<br>
+        3. 填入 API Key<br>
+        4. 回到本页面按 F5 刷新
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<div id="mainContent" style="display:none">
 <div class="steps">
 <div class="step active" id="step1">📸 拍照</div>
 <div class="step" id="step2">❓ 三问</div>
@@ -120,6 +173,7 @@ body{font-family:-apple-system,'PingFang SC','Helvetica Neue',sans-serif;backgro
 <div id="resultText" style="display:none"></div>
 </div></div></div>
 
+</div>
 <div class="footer">&nbsp;</div>
 </div>
 
@@ -129,18 +183,47 @@ const s = { variety:'不知道', sound:'没试', pinch:'没试' };
 let models = [];
 
 (async function(){
+  const gc = document.getElementById('guideCard');
+  const gi = document.getElementById('guideIcon');
+  const gt = document.getElementById('guideTitle');
+  const gd = document.getElementById('guideDesc');
+  const gs = document.getElementById('guideSteps');
+  const mc = document.getElementById('mainContent');
+
   try {
     const r = await fetch('http://127.0.0.1:8899/api/check');
     const d = await r.json();
     if(d.ok && d.models && d.models.length > 0) {
+      // ✅ 有模型，显示分析页面
+      if(gc) gc.style.display = 'none';
+      if(mc) mc.style.display = 'block';
       models = d.models;
       const sel = document.getElementById('modelSelect');
-      sel.innerHTML = models.map((m,i)=>`<option value="${m.id}">${m.name} (${m.provider})</option>`).join('');
-      sel.selectedIndex = 0;
-      if(models.length > 1) document.getElementById('modelCard').style.display = 'block';
+      if(sel) {
+        sel.innerHTML = models.map((m,i)=>`<option value="${m.id}">${m.name} (${m.provider})</option>`).join('');
+        sel.selectedIndex = 0;
+      }
+      if(models.length > 1) {
+        const mc2 = document.getElementById('modelCard');
+        if(mc2) mc2.style.display = 'block';
+      }
+    } else {
+      // ❌ 无模型，显示配置引导
+      if(gc) gc.style.display = 'block';
+      if(mc) mc.style.display = 'none';
+      if(gi) gi.textContent = '⚠️';
+      if(gt) gt.textContent = '未检测到识图模型';
+      if(gd) gd.textContent = '需要配置一个支持图像识别的 AI 模型供应商才能使用';
+      if(gs) gs.style.display = 'block';
     }
   } catch(e) {
-    // 后端没启动，用户点分析时会报错
+    // 服务器没启动
+    if(gc) gc.style.display = 'block';
+    if(mc) mc.style.display = 'none';
+    if(gi) gi.textContent = '🔌';
+    if(gt) gt.textContent = '无法连接后端服务';
+    if(gd) gd.textContent = '请确认服务器已启动：终端运行 nohup python3 server.py &';
+    if(gs) gs.style.display = 'block';
   }
 })();
 
