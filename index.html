@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>🍈 挑个榴莲吧</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,'PingFang SC','Helvetica Neue',sans-serif;background:#f5f5f7;color:#1d1d1f;min-height:100vh;padding:0 0 32px;-webkit-font-smoothing:antialiased}
+.container{max-width:440px;margin:0 auto;padding:0 14px}
+.header{background:linear-gradient(135deg,#fbbf24,#f59e0b,#d97706);margin:0 -14px 16px;padding:28px 20px 22px;text-align:center;position:relative;overflow:hidden}
+.header::after{content:'🍈';position:absolute;right:-4px;bottom:-14px;font-size:80px;opacity:0.1}
+.header h1{font-size:26px;font-weight:700;color:#fff;letter-spacing:-0.3px}
+.header p{color:rgba(255,255,255,0.85);font-size:14px;margin-top:2px}
+.card{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid rgba(0,0,0,0.04)}
+.card-title{font-size:15px;font-weight:600;margin-bottom:12px;color:#1d1d1f;display:flex;align-items:center;gap:6px}
+.upload-zone{border:2px dashed #d2d2d7;border-radius:10px;padding:28px 12px;text-align:center;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;background:#fafafa;-webkit-tap-highlight-color:transparent}
+.upload-zone:active{border-color:#f59e0b;background:#fefce8}
+.upload-zone .icon{font-size:38px;line-height:1}
+.upload-zone .label{font-size:15px;color:#6e6e73;margin-top:6px;font-weight:500}
+.upload-zone .hint{font-size:12px;color:#aeaeb2;margin-top:3px}
+.upload-zone input{display:none}
+.upload-zone.has-image{border-style:solid;border-color:#34c759;padding:4px;background:#fff}
+.upload-zone.has-image img{width:100%;max-height:260px;object-fit:contain;border-radius:6px;display:block}
+.upload-zone .change-btn{position:absolute;top:8px;right:8px;background:rgba(0,0,0,0.55);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:none;color:#fff;font-size:12px;padding:5px 12px;border-radius:16px;cursor:pointer;font-weight:500}
+.options{display:flex;flex-direction:column;gap:14px}
+.option-group .q-label{display:block;font-size:14px;color:#6e6e73;margin-bottom:8px;font-weight:500}
+.option-row{display:flex;flex-wrap:wrap;gap:6px}
+.option-btn{display:flex;align-items:center;justify-content:center;gap:3px;padding:11px 10px;border:1.5px solid #d2d2d7;border-radius:10px;background:#fafafa;color:#1d1d1f;font-size:14px;font-weight:500;text-align:center;cursor:pointer;transition:all .12s;-webkit-tap-highlight-color:transparent;user-select:none;min-height:44px}
+.option-btn:active{background:#fefce8;transform:scale(0.96)}
+.option-row[data-group="variety"] .option-btn{flex:0 0 calc(33.33% - 4px)}
+.option-row[data-group="sound"] .option-btn,.option-row[data-group="pinch"] .option-btn{flex:1}
+.option-btn.selected{border-color:#f59e0b;background:#fefce8;color:#b45309;font-weight:600;box-shadow:0 0 0 1px rgba(245,158,11,0.2)}
+.steps{display:flex;gap:6px;margin-bottom:14px}
+.step{flex:1;text-align:center;padding:7px 2px;border-radius:8px;font-size:12px;color:#aeaeb2;background:#f5f5f7;transition:all .2s;white-space:nowrap}
+.step.active{background:#fefce8;color:#b45309;font-weight:600}
+.step.done{background:#dcfce7;color:#166534}
+.btn{width:100%;padding:15px;border:none;border-radius:12px;font-size:17px;font-weight:600;cursor:pointer;transition:all .12s;-webkit-tap-highlight-color:transparent}
+.btn:active{transform:scale(0.97)}
+.btn:disabled{opacity:0.3;cursor:not-allowed;transform:none}
+.btn-primary{background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;box-shadow:0 4px 10px rgba(245,158,11,0.25)}
+.btn-primary.loading{opacity:0.7;pointer-events:none}
+.result-area{display:none;margin-top:12px}
+.result-area.show{display:block;animation:fadeUp .3s ease}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.result-content{background:#f5f5f7;border-radius:8px;padding:14px;font-size:13px;line-height:1.7;color:#3a3a3c;margin-top:8px;white-space:pre-wrap;word-break:break-word}
+.result-content strong{color:#1d1d1f}
+.loading-state{text-align:center;padding:30px 0}
+.loading-state .spinner{width:36px;height:36px;border:3px solid rgba(245,158,11,0.15);border-top-color:#f59e0b;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-state p{color:#888;font-size:14px}
+.model-select{width:100%;padding:10px 12px;border:1.5px solid #d2d2d7;border-radius:10px;font-size:14px;color:#1d1d1f;background:#fafafa;margin-bottom:10px}
+</style>
+</head>
+<body>
+<div class="header"><h1>🍈 挑个榴莲吧</h1><p>拍照 · 点选 · AI 真正看图分析</p></div>
+<div class="container">
+
+<div class="steps">
+<div class="step active" id="step1">📸 拍照</div>
+<div class="step" id="step2">❓ 三问</div>
+<div class="step" id="step3">✅ 结论</div>
+</div>
+
+<div class="card" id="modelCard" style="display:none">
+<div class="card-title">🤖 识图模型</div>
+<select class="model-select" id="modelSelect"></select>
+</div>
+
+<div class="card">
+<div class="card-title">📸 拍一下这颗榴莲</div>
+<div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+<div id="uploadPlaceholder"><div class="icon">📷</div><div class="label">点此拍照或从相册选取</div><div class="hint">正对果柄方向，拍全果型+底部</div></div>
+<img id="preview" style="display:none" alt="">
+<button class="change-btn" id="changeBtn" style="display:none" onclick="event.stopPropagation();resetUpload()">重拍</button>
+<input type="file" id="fileInput" accept="image/*" onchange="handleFile(this)">
+</div>
+</div>
+
+<div class="card">
+<div class="card-title">❓ 回答三个问题</div>
+<div class="options">
+<div class="option-group">
+<div class="q-label">① 什么品种？</div>
+<div class="option-row" data-group="variety">
+<div class="option-btn" data-value="金枕头" onclick="selectOption(this)">🥇金枕头</div>
+<div class="option-btn" data-value="猫山王" onclick="selectOption(this)">👑猫山王</div>
+<div class="option-btn" data-value="干尧" onclick="selectOption(this)">🫒干尧</div>
+<div class="option-btn" data-value="托曼尼" onclick="selectOption(this)">🟢托曼尼</div>
+<div class="option-btn" data-value="不知道" onclick="selectOption(this)">🤷不知道</div>
+</div></div>
+<div class="option-group">
+<div class="q-label">② 摇一摇，有声音吗？</div>
+<div class="option-row" data-group="sound">
+<div class="option-btn" data-value="有撞击声" onclick="selectOption(this)">💥有撞击声</div>
+<div class="option-btn" data-value="没声音" onclick="selectOption(this)">🔇没声音</div>
+<div class="option-btn" data-value="没试" onclick="selectOption(this)">❓没试</div>
+</div>
+<div style="font-size:12px;color:#aeaeb2;margin-top:5px">有"咚"感说明果肉已离壳</div>
+</div>
+<div class="option-group">
+<div class="q-label">③ 捏相邻刺，能捏动吗？</div>
+<div class="option-row" data-group="pinch">
+<div class="option-btn" data-value="能捏动" onclick="selectOption(this)">👍能捏动</div>
+<div class="option-btn" data-value="捏不动" onclick="selectOption(this)">✋捏不动</div>
+<div class="option-btn" data-value="没试" onclick="selectOption(this)">❓没试</div>
+</div></div>
+</div>
+</div>
+
+<button class="btn btn-primary" id="analyzeBtn" onclick="analyze()" disabled>🔍 AI 分析这颗榴莲</button>
+
+<div class="result-area" id="resultArea">
+<div class="card" style="border-left:3px solid #f59e0b">
+<div id="resultContent">
+<div class="loading-state" id="loadingState">
+<div class="spinner"></div>
+<p>AI 正在分析你的榴莲…</p>
+</div>
+<div id="resultText" style="display:none"></div>
+</div></div></div>
+
+<div class="footer">&nbsp;</div>
+</div>
+
+<script>
+let selectedImage = null;
+const s = { variety:'不知道', sound:'没试', pinch:'没试' };
+let models = [];
+
+(async function(){
+  try {
+    const r = await fetch('http://127.0.0.1:8899/api/check');
+    const d = await r.json();
+    if(d.ok && d.models && d.models.length > 0) {
+      models = d.models;
+      const sel = document.getElementById('modelSelect');
+      sel.innerHTML = models.map((m,i)=>`<option value="${m.id}">${m.name} (${m.provider})</option>`).join('');
+      sel.selectedIndex = 0;
+      if(models.length > 1) document.getElementById('modelCard').style.display = 'block';
+    }
+  } catch(e) {
+    // 后端没启动，用户点分析时会报错
+  }
+})();
+
+function handleFile(i) {
+  const f = i.files[0]; if(!f) return;
+  selectedImage = f;
+  const r = new FileReader();
+  r.onload = function(e) {
+    document.getElementById('uploadPlaceholder').style.display = 'none';
+    const p = document.getElementById('preview'); p.src = e.target.result; p.style.display = 'block';
+    document.getElementById('changeBtn').style.display = 'block';
+    document.getElementById('uploadZone').classList.add('has-image');
+    document.getElementById('step1').classList.remove('active'); document.getElementById('step1').classList.add('done');
+    document.getElementById('step2').classList.add('active'); chk();
+  }; r.readAsDataURL(f);
+}
+function resetUpload() {
+  selectedImage = null; document.getElementById('fileInput').value = '';
+  document.getElementById('uploadPlaceholder').style.display = '';
+  document.getElementById('preview').style.display = 'none'; document.getElementById('changeBtn').style.display = 'none';
+  document.getElementById('uploadZone').classList.remove('has-image');
+  document.getElementById('step1').classList.remove('done'); document.getElementById('step1').classList.add('active');
+  document.getElementById('step2').classList.remove('active');
+  document.getElementById('resultArea').classList.remove('show'); document.getElementById('step3').classList.remove('active');
+  chk();
+}
+function selectOption(btn) {
+  const g = btn.parentElement.dataset.group; s[g] = btn.dataset.value;
+  btn.parentElement.querySelectorAll('.option-btn').forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected'); chk();
+}
+function chk() { document.getElementById('analyzeBtn').disabled = !selectedImage; }
+
+async function analyze() {
+  const btn = document.getElementById('analyzeBtn');
+  btn.disabled = true; btn.textContent = '⏳ 分析中…'; btn.classList.add('loading');
+
+  document.getElementById('resultArea').classList.add('show');
+  document.getElementById('loadingState').style.display = '';
+  document.getElementById('resultText').style.display = 'none';
+  document.getElementById('step2').classList.remove('active');
+  document.getElementById('step2').classList.add('done');
+  document.getElementById('step3').classList.add('active');
+  setTimeout(() => document.getElementById('resultArea').scrollIntoView({behavior:'smooth',block:'center'}), 200);
+
+  const fm = new FormData();
+  fm.append('image', selectedImage);
+  fm.append('variety', s.variety);
+  fm.append('sound', s.sound);
+  fm.append('pinch', s.pinch);
+  fm.append('model', document.getElementById('modelSelect')?.value || '');
+
+  try {
+    const res = await fetch('http://127.0.0.1:8899/api/analyze', { method:'POST', body:fm });
+    const data = await res.json();
+    document.getElementById('loadingState').style.display = 'none';
+    document.getElementById('resultText').style.display = 'block';
+    if(data.ok) {
+      document.getElementById('resultText').innerHTML = `<div class="result-content">${data.result}</div>`;
+    } else {
+      document.getElementById('resultText').innerHTML = `<div class="result-content" style="color:#991b1b">⚠️ ${data.error}</div>`;
+    }
+  } catch(e) {
+    document.getElementById('loadingState').style.display = 'none';
+    document.getElementById('resultText').style.display = 'block';
+    document.getElementById('resultText').innerHTML =
+      `<div class="result-content" style="color:#991b1b">⚠️ 无法连接分析服务<br>请确认已启动后端：<br>nohup python3 server.py &</div>`;
+  }
+
+  btn.textContent = '🔄 再分析一个'; btn.disabled = false; btn.classList.remove('loading');
+}
+</script>
+</body>
+</html>
