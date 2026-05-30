@@ -46,6 +46,19 @@ nohup python3 server.py > /tmp/durian_server.log 2>&1 &
 | 声音 | 25% | 撞击感/沙沙声 | 闷声/无声 | 完全无声 |
 | 捏刺 | 20% | 微有弹性 | 偏软易捏 | 硬如石头 |
 
+## 量化判断
+
+| 维度 | 权重 | 干包✅ | 湿包🟡 | 生包❌ |
+|------|------|--------|--------|--------|
+| 果型 | 30% | 偏圆、离心率<1.3 | 圆/长均可 | 不规则、离心率>1.5 |
+| 刺 | 25% | 尖硬密集、奶油尖 | 钝圆有弹性 | 紧实捏不动、细长 |
+| 声音 | 25% | 撞击感/沙沙声 | 闷声/无声 | 完全无声 |
+| 捏刺 | 20% | 微有弹性 | 偏软易捏 | 硬如石头 |
+
+参考开源项目：
+- [pick_your_durian](https://github.com/thinksoso/pick_your_durian) — SAM分割→离心率+刺密度评估
+- [durian-helper-mini-program](https://github.com/liujiaqi222/durian-helper-mini-program) — YOLO检测+多模态评分
+
 ## 品种速查
 
 | 品种 | 特征 |
