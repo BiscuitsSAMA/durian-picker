@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """挑个榴莲吧 — HTTP服务器"""
 import os, sys, json, subprocess, uuid, io, email
-from PIL import Image as PIL_Image
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
@@ -87,24 +86,20 @@ class Handler(BaseHTTPRequestHandler):
             if not ms: self.json({'ok':False,'error':'无识图模型'}); return
             model_id = ms[0]['model_id']
 
-        ext = img['filename'].rsplit('.',1)[-1] if '.' in img['filename'] else 'jpg'
-        # 保存原始文件
-        raw_uuid = uuid.uuid4().hex
-        ext = img['filename'].rsplit('.',1)[-1] if '.' in img['filename'] else 'jpg'
-        raw_path = os.path.join(UPLOAD, f"{raw_uuid}.{ext}")
-        with open(raw_path, 'wb') as f: f.write(img['content'])
+        # 统一保存为 .jpg（兼容 MPO/HEIC/PNG 等所有格式）
+        uuid_name = uuid.uuid4().hex
+        path = os.path.join(UPLOAD, f"{uuid_name}.jpg")
+        raw_data = img['content']
 
-        # 如果是 MPO 格式，转换为 JPEG（Pillow 可以读取 MPO 的第一帧）
-        if ext.lower() in ('mpo', 'heic', 'heif'):
-            try:
-                pil = PIL_Image.open(raw_path)
-                path = os.path.join(UPLOAD, f"{raw_uuid}.jpg")
-                pil.convert('RGB').save(path, 'JPEG', quality=92)
-                os.remove(raw_path)  # 删掉原始 MPO
-            except:
-                path = raw_path  # 转换失败就用原文件
-        else:
-            path = raw_path
+        try:
+            # 用 Pillow 打开并转存为 JPEG，支持 MPO/HEIC/PNG 等
+            from PIL import Image as _P
+            from io import BytesIO
+            _P.open(BytesIO(raw_data)).convert('RGB').save(path, 'JPEG', quality=92)
+        except:
+            # 兜底：直接写文件
+            with open(path, 'wb') as f:
+                f.write(raw_data)
 
         quant, viz_url = None, None
         if ANALYZER_OK:
