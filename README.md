@@ -1,6 +1,6 @@
 # 🍈 挑个榴莲吧
 
-挑榴莲专家 Skill——任何支持 Skill 的 AI Agent（Claude Code、Hermes、小龙虾、Minis 等）均可使用。
+挑榴莲专家 Skill——Claude、Codex、Minis 等均可使用。
 
 ## 使用方法
 
