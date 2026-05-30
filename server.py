@@ -1,117 +1,138 @@
 #!/usr/bin/env python3
-"""
-🍈 挑个榴莲吧 - 本地分析服务器（Minis 增强版）
-
-启动方式：
-    nohup python3 server.py > /tmp/durian_server.log 2>&1 &
-
-然后浏览器打开 http://127.0.0.1:8899/
-"""
-import os, json, subprocess, uuid
-from flask import Flask, request, jsonify, send_from_directory
+"""挑个榴莲吧 — HTTP服务器"""
+import os, sys, json, subprocess, uuid, io, email
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse
 
 BASE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, BASE)
 UPLOAD = os.path.join(BASE, 'uploads')
 os.makedirs(UPLOAD, exist_ok=True)
 
-app = Flask(__name__, static_folder=None)
+try:
+    from analyzer import analyze_image_viz, analyze_batch
+    ANALYZER_OK = True
+except Exception as e:
+    ANALYZER_OK = False
 
-
-def find_vision_models():
-    """检测可用的图像识别模型"""
+def find_models():
     try:
-        r = subprocess.run(['minis-model-use', 'list'], capture_output=True, text=True, timeout=10)
-        data = json.loads(r.stdout)
-        models = data.get('data', {}).get('models', [])
-        return [m for m in models if 'image_input' in m.get('modalities', [])]
+        r = subprocess.run(['minis-model-use','list'], capture_output=True, text=True, timeout=8)
+        return [m for m in json.loads(r.stdout).get('data',{}).get('models',[]) if 'image_input' in m.get('modalities',[])]
     except:
         return []
 
+MIME_MAP = {'html':'text/html; charset=utf-8','js':'text/javascript','css':'text/css','png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg'}
 
-@app.route('/')
-def index():
-    return send_from_directory(BASE, 'index.html')
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def json(self, data, code=200):
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode())
+    def fserve(self, path, mime):
+        if not os.path.exists(path): self.send_response(404); self.end_headers(); return
+        self.send_response(200); self.send_header('Content-Type', mime); self.end_headers()
+        with open(path, 'rb') as f: self.wfile.write(f.read())
 
+    def do_GET(self):
+        p = urlparse(self.path).path
+        if p == '/': self.fserve(os.path.join(BASE, 'index.html'), 'text/html; charset=utf-8')
+        elif p == '/api/check':
+            ms = find_models()
+            self.json({'ok':len(ms)>0,'count':len(ms),'analyzer_ok':ANALYZER_OK,
+                'models':[{'id':m['model_id'],'name':m['display_name'],'provider':m['instance_label']} for m in ms]})
+        elif p.startswith('/uploads/'):
+            self.fserve(os.path.join(UPLOAD, os.path.basename(p)), 'image/png')
+        else:
+            fp = os.path.join(BASE, p.lstrip('/'))
+            if os.path.isfile(fp):
+                ext = fp.rsplit('.',1)[-1].lower()
+                self.fserve(fp, MIME_MAP.get(ext, 'text/plain'))
+            else:
+                self.json({'error':'not found'}, 404)
 
-@app.route('/<path:p>')
-def sf(p):
-    return send_from_directory(BASE, p)
+    def do_POST(self):
+        if self.path != '/api/analyze': self.json({'error':'not found'}, 404); return
+        ct = self.headers.get('Content-Type', '')
+        raw = self.rfile.read(int(self.headers.get('Content-Length', 0)))
+        try:
+            msg = email.parser.BytesParser().parsebytes(
+                b'MIME-Version: 1.0\r\nContent-Type: ' + ct.encode() + b'\r\n\r\n' + raw)
+        except:
+            self.json({'ok':False,'error':'解析失败'}); return
 
+        fields = {}
+        if msg.is_multipart():
+            for part in msg.get_payload():
+                name = part.get_param('name', header='content-disposition')
+                fn = part.get_filename()
+                if fn:
+                    fields[name] = {'filename': fn, 'content': part.get_payload(decode=True)}
+                else:
+                    fields[name] = part.get_payload(decode=True).decode('utf-8', errors='replace')
+        else:
+            self.json({'ok':False,'error':'需要 multipart'}); return
 
-@app.route('/api/check')
-def api_check():
-    """检测是否有可用识图模型"""
-    models = find_vision_models()
-    return jsonify({
-        'ok': len(models) > 0,
-        'models': [{'id': m['model_id'], 'name': m['display_name'], 'provider': m['instance_label']} for m in models],
-        'count': len(models)
-    })
+        variety = fields.get('variety', '不知道')
+        sound = fields.get('sound', '没试'); pinch = fields.get('pinch', '没试')
+        mode = fields.get('mode', 'single'); model_id = fields.get('model', '')
+        img = fields.get('image')
+        if not img: self.json({'ok':False,'error':'请上传照片'}); return
+        if not model_id:
+            ms = find_models()
+            if not ms: self.json({'ok':False,'error':'无识图模型'}); return
+            model_id = ms[0]['model_id']
 
+        ext = img['filename'].rsplit('.',1)[-1] if '.' in img['filename'] else 'jpg'
+        path = os.path.join(UPLOAD, f"{uuid.uuid4().hex}.{ext}")
+        with open(path, 'wb') as f: f.write(img['content'])
 
-@app.route('/api/analyze', methods=['POST'])
-def analyze():
-    variety = request.form.get('variety', '不知道')
-    sound = request.form.get('sound', '没试')
-    pinch = request.form.get('pinch', '没试')
-    model_id = request.form.get('model', '')
-    img = request.files.get('image')
-
-    if not img:
-        return jsonify({'ok': False, 'error': '请上传照片'})
-
-    # 自动选第一个可用模型
-    if not model_id:
-        models = find_vision_models()
-        if not models:
-            return jsonify({'ok': False, 'error': '没有可用的识图模型，请先配置 Provider'})
-        model_id = models[0]['model_id']
-
-    ext = img.filename.rsplit('.', 1)[-1] if '.' in img.filename else 'jpg'
-    path = os.path.join(UPLOAD, f"{uuid.uuid4().hex}.{ext}")
-    img.save(path)
-
-    prompt = {
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "image_url", "image_url": {"url": f"file://{path}"}},
-                {"type": "text", "text": f"用户信息：品种={variety}，声音={sound}，捏刺={pinch}。请分析这张榴莲照片：1)果型偏圆还是长？底平还是尖？2)刺密集还是稀疏？尖还是钝？3)颜色成熟度？4)综合判断：干包/湿包/生包？熟度？评分1-5星？一句话买不买？"}
-            ]
-        }]
-    }
-
-    pf = os.path.join(UPLOAD, '_p.json')
-    with open(pf, 'w') as f:
-        json.dump(prompt, f)
-
-    try:
-        r = subprocess.run(
-            ['minis-model-use', 'run', '--model', model_id, '--input', pf],
-            capture_output=True, text=True, timeout=30
-        )
-        resp = json.loads(r.stdout)
-        text = resp.get('data', {}).get('output_text', '')
-        if not text:
-            err = resp.get('error', {})
-            text = err.get('message', '分析失败')
-    except subprocess.TimeoutExpired:
-        text = '⏱️ 分析超时，请重试'
-    except Exception as e:
-        text = f'⚠️ 系统错误: {e}'
-    finally:
-        for f in [pf, path]:
-            try: os.remove(f)
+        quant, viz_url = None, None
+        if ANALYZER_OK:
+            try:
+                if mode == 'batch': quant = analyze_batch(path)
+                else:
+                    quant = analyze_image_viz(path)
+                    if quant and quant.get('viz_path') and os.path.exists(quant['viz_path']):
+                        viz_url = f"/uploads/{os.path.basename(quant['viz_path'])}"
             except: pass
 
-    return jsonify({'ok': True, 'result': text})
+        info = f"品种={variety}，声音={sound}，捏刺={pinch}"
+        if quant and isinstance(quant, dict):
+            if quant.get("roi_valid"):
+                info += f"\n【量化】离心率={quant.get('eccentricity','N/A')}({quant.get('eccentricity_desc','')}) | 刺密度={quant.get('spine_density_index','N/A')}({quant.get('spine_desc','')}) | 颜色={quant.get('color',{}).get('description','')} | 参考分={quant.get('reference_score','N/A')}/100"
+            elif "results" in quant:
+                info += f"\n【批量共{quant.get('count',0)}个】"
+                for r in quant.get("results",[]):
+                    a = r.get("analysis",{}); info += f"\n{r['label']}: 离心率={a.get('eccentricity','N/A')} 参考分={a.get('reference_score','N/A')}"
+                info += f"\n算法推荐: {quant.get('best','N/A')}"
 
+        prompt = {"messages":[{"role":"user","content":[
+            {"type":"image_url","image_url":{"url":f"file://{path}"}},
+            {"type":"text","text":f"你是挑榴莲专家。{info}"}
+        ]}]}
+        pf = os.path.join(UPLOAD, '_p.json')
+        with open(pf, 'w') as f: json.dump(prompt, f)
+        try:
+            r = subprocess.run(['minis-model-use','run','--model',model_id,'--input',pf], capture_output=True, text=True, timeout=30)
+            resp = json.loads(r.stdout)
+            text = resp.get('data',{}).get('output_text','') or resp.get('error',{}).get('message','失败')
+        except subprocess.TimeoutExpired: text = '⏱️ 超时'
+        except Exception as e: text = f'⚠️ {e}'
+        finally:
+            for f in [pf, path]:
+                try: os.remove(f)
+                except: pass
+        self.json({'ok':True,'result':text,'viz_url':viz_url,'analyzer_ok':ANALYZER_OK})
 
 if __name__ == '__main__':
-    print('🍈 挑个榴莲吧 · 服务器启动 → http://127.0.0.1:8899')
-    models = find_vision_models()
-    if models:
-        print(f'   ✅ 检测到 {len(models)} 个识图模型，可用')
-    else:
-        print('   ⚠️ 未检测到识图模型，请先在 Settings → Providers 配置')
-    app.run(host='127.0.0.1', port=8899, debug=False)
+    port = 8899
+    print(f'🍈 挑个榴莲吧 → http://127.0.0.1:{port}')
+    print(f'   {"✅" if ANALYZER_OK else "⚠️"} 分析模块: {"已加载" if ANALYZER_OK else "未加载"}')
+    ms = find_models()
+    if ms: print(f'   ✅ 识图模型: {len(ms)}个')
+    else: print('   ⚠️ 无识图模型')
+    HTTPServer(('127.0.0.1', port), Handler).serve_forever()

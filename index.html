@@ -199,7 +199,14 @@ async function analyze() {
     document.getElementById('loadingState').style.display = 'none';
     document.getElementById('resultText').style.display = 'block';
     if(data.ok) {
-      document.getElementById('resultText').innerHTML = `<div class="result-content">${data.result}</div>`;
+      let html = `<div class="result-content">${data.result}</div>`;
+      if(data.viz_url) {
+        html = `<div style="margin-bottom:12px;background:#fefce8;border-radius:8px;padding:8px;text-align:center">
+          <img src="${data.viz_url}" style="width:100%;border-radius:6px" alt="分析可视化">
+          <div style="font-size:11px;color:#854d0e;margin-top:4px">📊 图像量化分析可视化</div>
+        </div>` + html;
+      }
+      document.getElementById('resultText').innerHTML = html;
     } else {
       document.getElementById('resultText').innerHTML = `<div class="result-content" style="color:#991b1b">⚠️ ${data.error}</div>`;
     }

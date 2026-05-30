@@ -1,180 +1,214 @@
 """
 🍈 榴莲图像分析模块
-基于 OpenCV 做图像预处理，计算量化指标辅助 VL 模型判断。
-
-功能：
-  1. 离心率 — 评估果型圆度
-  2. 刺密度 — 评估刺的密集程度
-  3. 颜色分析 — 评估成熟度
+依赖：Pillow + NumPy + SciPy（Alpine musl 兼容）
+功能：离心率、刺密度、颜色分析 + 可视化
 """
-import cv2
+from PIL import Image, ImageDraw, ImageFont
 import numpy as np
-import math
+from scipy import ndimage
+import math, os
+
+
+def _rgb_to_hsv(rgb):
+    r, g, b = rgb[...,0].astype(np.float32)/255.0, rgb[...,1].astype(np.float32)/255.0, rgb[...,2].astype(np.float32)/255.0
+    cmax, cmin = np.maximum(r, np.maximum(g,b)), np.minimum(r, np.minimum(g,b))
+    delta = cmax - cmin + 1e-10
+    h = np.zeros_like(cmax, dtype=np.float32)
+    mr, mg, mb = (cmax==r), (cmax==g), (cmax==b)
+    h[mr] = (60*((g[mr]-b[mr])/delta[mr])+360)%360
+    h[mg] = 60*((b[mg]-r[mg])/delta[mg])+120
+    h[mb] = 60*((r[mb]-g[mb])/delta[mb])+240
+    s = np.where(cmax==0, 0.0, delta/cmax*255.0).astype(np.float32)
+    v = (cmax*255.0).astype(np.float32)
+    return np.stack([h,s,v], axis=-1)
+
+def _find_largest_contour(mask):
+    labeled, n = ndimage.label(mask)
+    if n==0: return None
+    sizes = ndimage.sum(mask, labeled, range(1, n+1))
+    return (labeled==(np.argmax(sizes)+1)).astype(np.uint8)
+
+def _contour_area(b): return np.sum(b>0)
+
+def _ellipse_from_moment(binary):
+    ys, xs = np.where(binary>0)
+    if len(xs)<5: return None
+    xm, ym = np.mean(xs), np.mean(ys)
+    uxx, uyy = np.mean((xs-xm)**2), np.mean((ys-ym)**2)
+    uxy = np.mean((xs-xm)*(ys-ym))
+    c = math.sqrt((uxx-uyy)**2+4*uxy**2)
+    l1, l2 = (uxx+uyy+c)/2, (uxx+uyy-c)/2
+    if l1<=0 or l2<=0: return None
+    a, b = math.sqrt(l1)*2, math.sqrt(l2)*2
+    if a<=0: return None
+    ecc = math.sqrt(1-(b**2)/(a**2)) if a>b else 0
+    return ecc, a, b, xm, ym
 
 
 def analyze_image(image_path):
-    """
-    分析榴莲图片，返回量化指标字典。
-    """
-    img = cv2.imread(image_path)
-    if img is None:
+    """分析单张榴莲图片，返回量化指标"""
+    try:
+        pil_img = Image.open(image_path).convert('RGB')
+    except:
         return {"error": "无法读取图片", "roi_valid": False}
 
-    h, w = img.shape[:2]
-    result = {"roi_valid": False}
+    w, h = pil_img.size
+    if max(w,h)>800:
+        s = 800.0/max(w,h); pil_img = pil_img.resize((int(w*s),int(h*s)))
+        w, h = pil_img.size
+    arr = np.array(pil_img); result = {"roi_valid": False}
 
-    # === 1. 提取榴莲主体 ===
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    lower = np.array([15, 20, 30])
-    upper = np.array([45, 255, 255])
-    mask = cv2.inRange(hsv, lower, upper)
+    hsv = _rgb_to_hsv(arr)
+    mask = ((hsv[...,0]>=12)&(hsv[...,0]<=50)&(hsv[...,1]>=15)&(hsv[...,2]>=25)).astype(np.uint8)
+    mask = ndimage.binary_closing(mask, np.ones((5,5)), iterations=2).astype(np.uint8)
+    mask = ndimage.binary_opening(mask, np.ones((3,3)), iterations=1).astype(np.uint8)
+    binary = _find_largest_contour(mask)
+    if binary is None or _contour_area(binary)<(w*h)*0.03:
+        return {"error":"未识别到榴莲主体", "roi_valid":False}
+    result["roi_valid"]=True; result["roi_area_ratio"]=round(_contour_area(binary)/(w*h),3)
 
-    kernel = np.ones((5, 5), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+    ellipse = _ellipse_from_moment(binary)
+    if ellipse:
+        ecc,a,b,cx,cy = ellipse; ecc = round(ecc,3)
+        if ecc<0.70: ed,es = "偏圆",85
+        elif ecc<0.85: ed,es = "中等",60
+        else: ed,es = "偏长",35
+        result["eccentricity"]=ecc; result["eccentricity_desc"]=ed; result["eccentricity_score"]=es
+        result["ellipse"]={"cx":float(cx),"cy":float(cy),"a":float(a),"b":float(b)}
 
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        lower2 = np.array([10, 10, 20])
-        upper2 = np.array([50, 255, 255])
-        mask2 = cv2.inRange(hsv, lower2, upper2)
-        mask2 = cv2.morphologyEx(mask2, cv2.MORPH_CLOSE, kernel, iterations=2)
-        contours, _ = cv2.findContours(mask2, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if contours:
-            mask = mask2
+    gray = np.mean(arr,axis=2).astype(np.float64)
+    sx = ndimage.sobel(gray,1); sy = ndimage.sobel(gray,0)
+    edges = np.hypot(sx,sy)>40
+    edge_roi = edges&(binary>0)
+    rp, ep = np.sum(binary>0), np.sum(edge_roi)
+    edens = (ep/rp*100) if rp>0 else 0
+    if edens>8: sd,ss = "密集",80
+    elif edens>4: sd,ss = "中等",55
+    else: sd,ss = "稀疏",30
+    result["edge_density"]=round(edens,2); result["spine_density_index"]=min(100,max(0,int(edens*8)))
+    result["spine_desc"]=sd; result["spine_score"]=ss
 
-    if not contours:
-        return {"error": "未识别到榴莲主体", "roi_valid": False}
+    h_vals = hsv[...,0][binary>0]; s_vals = hsv[...,1][binary>0]
+    ah, asat = float(np.mean(h_vals)), float(np.mean(s_vals))
+    if 15<=ah<=25 and asat>40: cd,cs = "金黄/橙黄（成熟良好）",80
+    elif 25<ah<=38: cd,cs = "黄绿（中等成熟）",55
+    elif ah<15: cd,cs = "偏橙/棕（可能过熟）",40
+    else: cd,cs = "偏青（未熟）",30
+    result["color"]={"avg_hue":round(ah,1),"avg_saturation":round(asat,1),"description":cd,"score":cs}
 
-    c = max(contours, key=cv2.contourArea)
-    area = cv2.contourArea(c)
-    if area < (h * w) * 0.05:
-        return {"error": "榴莲区域占比过小", "roi_valid": False}
+    rscore = round(sum([result.get("eccentricity_score",50)*0.35,result.get("spine_score",50)*0.35,result["color"]["score"]*0.30]),1)
+    result["reference_score"] = rscore
 
-    result["roi_valid"] = True
-    result["roi_area_ratio"] = round(area / (h * w), 3)
+    result["_img"] = pil_img; result["_binary"] = binary
+    result["_edges"] = edges; result["_edge_roi"] = edge_roi
+    return result
 
-    # === 2. 离心率计算 ===
-    if len(c) >= 5:
-        ellipse = cv2.fitEllipse(c)
-        (_, _), (major, minor), _ = ellipse
-        a = max(major, minor) / 2
-        b = min(major, minor) / 2
-        ecc = round(math.sqrt(1 - (b**2)/(a**2)) if a > 0 else 0, 3)
 
-        if ecc < 0.70:
-            ecc_desc, ecc_score = "偏圆", 85
-        elif ecc < 0.85:
-            ecc_desc, ecc_score = "中等", 60
-        else:
-            ecc_desc, ecc_score = "偏长", 35
+def generate_viz(result, image_path):
+    """生成分析过程可视化图"""
+    if not result.get("roi_valid"): return None
+    pil_img, binary = result.get("_img"), result.get("_binary")
+    edges, edge_roi = result.get("_edges"), result.get("_edge_roi")
+    if pil_img is None or binary is None: return None
 
-        result["eccentricity"] = ecc
-        result["eccentricity_desc"] = ecc_desc
-        result["eccentricity_score"] = ecc_score
+    w, h = pil_img.size; pw, ph = 500, 375
+    canvas = Image.new('RGB', (pw*2, ph*2), (245,245,247))
+    draw = ImageDraw.Draw(canvas)
+    try:
+        ft = ImageFont.truetype("/usr/share/fonts/noto/NotoSansCJK-Regular.ttc", 18)
+        fs = ImageFont.truetype("/usr/share/fonts/noto/NotoSansCJK-Regular.ttc", 14)
+        fxs = ImageFont.truetype("/usr/share/fonts/noto/NotoSansCJK-Regular.ttc", 12)
+    except:
+        ft = fs = fxs = ImageFont.load_default()
 
-    # === 3. 刺密度估算 ===
-    contour_mask = np.zeros((h, w), dtype=np.uint8)
-    cv2.drawContours(contour_mask, [c], -1, 255, -1)
+    def paste_at(panel, img):
+        cw, ch = pw-4, ph-4
+        if img.size[0]>cw or img.size[1]>ch: img.thumbnail((cw,ch), Image.LANCZOS)
+        canvas.paste(img, (panel[0]*pw+2, panel[1]*ph+2))
 
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 50, 150)
-    edge_in_roi = cv2.bitwise_and(edges, edges, mask=contour_mask)
+    paste_at((0,0), pil_img)
+    draw.text((10,6), "📸 原图", fill="#1d1d1f", font=fs)
 
-    roi_pixels = np.sum(contour_mask > 0)
-    edge_pixels = np.sum(edge_in_roi > 0)
-    edge_density = (edge_pixels / roi_pixels * 100) if roi_pixels > 0 else 0
+    # 轮廓覆盖
+    ov = pil_img.copy().convert('RGBA'); oa = np.array(ov)
+    # 确保binary与oa的2D尺寸一致（PIL size=宽x高 vs numpy shape=高x宽）
+    if oa.shape[0] != binary.shape[0] or oa.shape[1] != binary.shape[1]:
+        from PIL import Image as _IR
+        binary = np.array(_IR.fromarray(binary.astype(np.uint8)*255).resize((oa.shape[1], oa.shape[0]), _IR.NEAREST)) > 0
+    oa[binary>0] = (oa[binary>0]*0.6 + np.array([0,122,255,100])*0.4).astype(np.uint8)
+    ce = ndimage.binary_dilation(binary, iterations=2).astype(np.uint8) - binary
+    oa[ce>0] = [0,122,255,255]
 
-    if edge_density > 10:
-        spine_desc, spine_score = "密集", 80
-    elif edge_density > 5:
-        spine_desc, spine_score = "中等", 55
+    ell = result.get("ellipse")
+    if ell:
+        cx, cy, ea, eb = ell["cx"], ell["cy"], ell["a"], ell["b"]
+        ov2 = Image.fromarray(oa); d2 = ImageDraw.Draw(ov2)
+        d2.ellipse([cx-ea, cy-eb, cx+ea, cy+eb], outline="#ff3b30", width=3)
+        d2.text((cx+5, cy-20), f'离心率={result.get("eccentricity","?")} {result.get("eccentricity_desc","")}', fill="#ff3b30", font=fxs)
+        paste_at((1,0), ov2.convert('RGB'))
     else:
-        spine_desc, spine_score = "稀疏", 30
+        paste_at((1,0), Image.fromarray(oa).convert('RGB'))
+    draw.text((pw+10,6), "🎯 轮廓+椭圆拟合", fill="#1d1d1f", font=fs)
 
-    result["edge_density"] = round(edge_density, 2)
-    result["spine_density_index"] = min(100, max(0, int(edge_density * 6)))
-    result["spine_desc"] = spine_desc
-    result["spine_score"] = spine_score
+    # 边缘图
+    ev = (edges.astype(np.uint8)*255)
+    paste_at((0,1), Image.fromarray(ev, mode='L').convert('RGB'))
+    draw.text((10,ph+6), f"🌵 边缘·刺密度={result.get('spine_density_index','?')}({result.get('spine_desc','')})", fill="#1d1d1f", font=fs)
 
-    # === 4. 颜色分析 ===
-    roi_hsv = cv2.bitwise_and(hsv, hsv, mask=contour_mask)
-    h_vals = roi_hsv[:, :, 0][contour_mask > 0]
-    s_vals = roi_hsv[:, :, 1][contour_mask > 0]
-    avg_h = np.mean(h_vals) if len(h_vals) > 0 else 0
-    avg_s = np.mean(s_vals) if len(s_vals) > 0 else 0
+    erv = (edge_roi.astype(np.uint8)*255)
+    paste_at((1,1), Image.fromarray(erv, mode='L').convert('RGB'))
+    draw.text((pw+10,ph+6), f"📐 ROI·{result.get('edge_density','?')}%", fill="#1d1d1f", font=fs)
 
-    if 15 <= avg_h <= 25 and avg_s > 50:
-        color_desc, color_score = "金黄/橙黄（成熟良好）", 80
-    elif 25 < avg_h <= 35 and avg_s > 40:
-        color_desc, color_score = "黄绿（中等成熟）", 60
-    elif avg_h < 15:
-        color_desc, color_score = "偏橙/棕（可能过熟）", 40
-    else:
-        color_desc, color_score = "偏青（未熟）", 30
+    # 底部评分条
+    score = result.get("reference_score", 0)
+    sc = "#34c759" if score>=70 else ("#f59e0b" if score>=50 else "#ff3b30")
+    draw.rectangle([0, ph*2-36, pw*2, ph*2], fill="#1d1d1f")
+    draw.text((20, ph*2-30), f"综合参考分: {score}/100", fill=sc, font=ft)
+    bx, bw = 240, 240
+    draw.rectangle([bx, ph*2-26, bx+bw, ph*2-12], fill="#3a3a3c")
+    draw.rectangle([bx, ph*2-26, bx+int(bw*score/100), ph*2-12], fill=sc)
 
-    result["color"] = {
-        "avg_hue": round(float(avg_h), 1),
-        "avg_saturation": round(float(avg_s), 1),
-        "description": color_desc,
-        "score": color_score
-    }
+    viz_path = image_path.rsplit('.',1)[0]+'_viz.png'
+    canvas.save(viz_path, quality=92)
+    return viz_path
 
-    # === 5. 综合参考分 ===
-    scores = [
-        result.get("eccentricity_score", 50) * 0.35,
-        result.get("spine_score", 50) * 0.35,
-        result["color"]["score"] * 0.30,
-    ]
-    result["reference_score"] = round(sum(scores), 1)
+
+def analyze_image_viz(image_path):
+    """分析+可视化一站式"""
+    result = analyze_image(image_path)
+    if result.get("roi_valid"):
+        viz = generate_viz(result, image_path)
+        if viz: result["viz_path"] = viz
+    for k in ["_img","_binary","_edges","_edge_roi","ellipse"]:
+        result.pop(k, None)
     return result
 
 
 def analyze_batch(image_path):
-    """批量检测图中多个榴莲，分别分析。"""
-    img = cv2.imread(image_path)
-    if img is None:
-        return {"error": "无法读取图片"}
-
-    h, w = img.shape[:2]
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    lower = np.array([12, 15, 25])
-    upper = np.array([48, 255, 255])
-    mask = cv2.inRange(hsv, lower, upper)
-
-    kernel = np.ones((5, 5), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return {"count": 0, "error": "未检测到榴莲"}
-
-    min_area = (h * w) * 0.02
-    valid = [c for c in contours if cv2.contourArea(c) >= min_area]
-    if not valid:
-        return {"count": 0, "error": "未检测到有效榴莲区域"}
-
-    valid.sort(key=lambda c: cv2.boundingRect(c)[0])
-    labels = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    results = []
-
-    for i, c in enumerate(valid):
-        label = labels[i] if i < len(labels) else f"#{i+1}"
-        x, y, cw, ch = cv2.boundingRect(c)
-        pad = int(min(cw, ch) * 0.1)
-        roi = img[max(0, y-pad):min(h, y+ch+pad), max(0, x-pad):min(w, x+cw+pad)]
-
-        roi_path = image_path.rsplit('.', 1)[0] + f'_{label}.png'
-        cv2.imwrite(roi_path, roi)
-
-        analysis = analyze_image(roi_path)
-        results.append({"label": label, "analysis": analysis})
-
-    results.sort(key=lambda r: r["analysis"].get("reference_score", 0), reverse=True)
-    return {
-        "count": len(results),
-        "results": results,
-        "best": results[0]["label"] if results else None,
-        "best_score": results[0]["analysis"].get("reference_score", 0) if results else 0
-    }
+    """批量检测多个榴莲"""
+    pil_img = Image.open(image_path).convert('RGB')
+    w, h = pil_img.size
+    if max(w,h)>1000:
+        s = 1000.0/max(w,h); pil_img = pil_img.resize((int(w*s),int(h*s)))
+        w, h = pil_img.size
+    arr = np.array(pil_img); hsv = _rgb_to_hsv(arr)
+    mask = ((hsv[...,0]>=12)&(hsv[...,0]<=50)&(hsv[...,1]>=15)&(hsv[...,2]>=25)).astype(np.uint8)
+    mask = ndimage.binary_closing(mask, np.ones((5,5)), iterations=2).astype(np.uint8)
+    mask = ndimage.binary_opening(mask, np.ones((3,3)), iterations=1).astype(np.uint8)
+    labeled, n = ndimage.label(mask)
+    if n==0: return {"count":0,"error":"未检测到榴莲"}
+    min_a = (w*h)*0.015; results=[]; L="ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    for i in range(1,n+1):
+        comp = (labeled==i).astype(np.uint8)
+        if np.sum(comp>0)<min_a: continue
+        ys,xs = np.where(comp>0)
+        y1,y2,x1,x2 = max(0,ys.min()-5),min(h,ys.max()+5),max(0,xs.min()-5),min(w,xs.max()+5)
+        roi = arr[y1:y2,x1:x2]
+        idx = len(results); lb = L[idx] if idx<len(L) else f"#{idx+1}"
+        rp = image_path.rsplit('.',1)[0]+f'_{lb}.png'
+        Image.fromarray(roi).save(rp)
+        a = analyze_image_viz(rp)
+        results.append({"label":lb,"analysis":a})
+    results.sort(key=lambda r:r["analysis"].get("reference_score",0), reverse=True)
+    return {"count":len(results),"results":results,"best":results[0]["label"] if results else None,
+            "best_score":results[0]["analysis"].get("reference_score",0) if results else 0}
